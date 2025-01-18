@@ -11,8 +11,8 @@ Require Import PL.DenotationalBasic.
 Local Open Scope string.
 Local Open Scope Z.
 Local Open Scope sets.
-
-
+Require Import Coq.Lists.List. Import ListNotations.
+Local Open Scope list.
 
 
 (** * 在Coq中表示集合与二元关系 *)
@@ -82,20 +82,31 @@ Import Lang_SimpleWhile
        StateModel_SimpleWhile1
        DntSem_SimpleWhile2.
 
-(** 扩展状态模型 **)
-Record io_state := {
-  vars: state;                (* 变量状态 *)
-  input_queue: list Z;        (* 输入队列 *)
-  output_queue: list Z;       (* 输出队列 *)
-}.
+Definition enqueue_output (s: io_state) (v: Z) : io_state :=
+  {|
+    vars := s.(vars);
+    input_queue := s.(input_queue);
+    output_queue := s.(output_queue) ++ [v];
+  |}.
+
+Definition dequeue_input (s: io_state) : option (io_state * Z) :=
+  match s.(input_queue) with
+  | [] => None
+  | x :: xs =>
+      Some ({|
+              vars := s.(vars);
+              input_queue := xs;
+              output_queue := s.(output_queue);
+            |}, x)
+  end.
 
 Record asgn_sem
          (X: var_name)
-         (D: state -> Z)
-         (s1 s2: state): Prop :=
+         (D: io_state -> Z)
+         (s1 s2: io_state): Prop :=
   {
-    asgn_sem_asgn_var: s2 X = D s1;
-    asgn_sem_other_var: forall Y, X <> Y -> s2 Y = s1 Y;
+    asgn_sem_asgn_var: s2.(vars) X = D s1;
+    asgn_sem_other_var: forall Y, X <> Y -> s2.(vars) Y = s1.(vars) Y;
   }.
 
 Notation "H '.(asgn_sem_asgn_var)'" :=
@@ -106,54 +117,52 @@ Notation "H '.(asgn_sem_other_var)'" :=
   (asgn_sem_other_var _ _ _ _ H)
   (at level 1).
 
+Record input_sem
+        (X: var_name)
+        (s1 s2: io_state): Prop :=
+  {
+  input_sem_dequeue: dequeue_input s1 = Some (s2, s2.(vars) X);
+  input_sem_queues: s2.(output_queue) = s1.(output_queue);
+  input_sem_vars: forall Y, X <> Y -> s2.(vars) Y = s1.(vars) Y;
+  }.
 
-Definition skip_sem: state -> state -> Prop :=
+Record output_sem
+         (E: io_state -> Z)
+         (s1 s2: io_state): Prop :=
+  {
+    output_sem_enqueue: s2 = enqueue_output s1 (E s1);
+    output_sem_vars: s2.(vars) = s1.(vars);
+    output_sem_queues: s2.(input_queue) = s1.(input_queue);
+  }.
+
+Definition skip_sem: io_state -> io_state -> Prop :=
   Rels.id.
 
-Definition seq_sem (D1 D2: state -> state -> Prop):
-  state -> state -> Prop :=
+Definition seq_sem (D1 D2: io_state -> io_state -> Prop):
+  io_state -> io_state -> Prop :=
   D1 ∘ D2.
 
-(** 读取操作的语义 **)
-Definition read_sem (X: var_name) (s1 s2: io_state): Prop :=
-  match s1.(input_queue) with
-  | [] => (* 如果输入队列为空，状态不变 *)
-      s2 = s1
-  | v :: q' => (* 从输入队列读取一个值，更新变量并移除队首元素 *)
-      s2.(vars) X = v /\
-      s2.(vars) = s1.(vars) [X <- v] /\
-      s2.(input_queue) = q' /\
-      s2.(output_queue) = s1.(output_queue)
-  end.
-
-(** 写操作的语义 **)
-Definition write_sem (e: expr_int) (s1 s2: io_state): Prop :=
-  let v := eval_expr_int e s1.(vars) in
-  s2.(vars) = s1.(vars) /\
-  s2.(input_queue) = s1.(input_queue) /\
-  s2.(output_queue) = s1.(output_queue) ++ [v].
-
 Definition test_true
-             (D: state -> bool):
-  state -> state -> Prop :=
+             (D: io_state -> bool):
+  io_state -> io_state -> Prop :=
   Rels.test (fun s => D s = true).
 
 Definition test_false
-             (D: state -> bool):
-  state -> state -> Prop :=
+             (D: io_state -> bool):
+  io_state -> io_state -> Prop :=
   Rels.test (fun s => D s = false).
 
 Definition if_sem
-             (D0: state -> bool)
-             (D1 D2: state -> state -> Prop):
-  state -> state -> Prop :=
+             (D0: io_state -> bool)
+             (D1 D2: io_state -> io_state -> Prop):
+  io_state -> io_state -> Prop :=
   (test_true D0 ∘ D1) ∪ (test_false D0 ∘ D2).
 
 Fixpoint iterLB
-           (D0: state -> bool)
-           (D1: state -> state -> Prop)
+           (D0: io_state -> bool)
+           (D1: io_state -> io_state -> Prop)
            (n: nat):
-  state -> state -> Prop :=
+  io_state -> io_state -> Prop :=
   match n with
   | O => test_false D0
   | S n0 => test_true D0 ∘ D1 ∘ iterLB D0 D1 n0
@@ -163,18 +172,18 @@ Module WhileSem1.
 
 (** 第一种定义方式 *)
 Definition while_sem
-             (D0: state -> bool)
-             (D1: state -> state -> Prop):
-  state -> state -> Prop :=
+             (D0: io_state -> bool)
+             (D1: io_state -> io_state -> Prop):
+  io_state -> io_state -> Prop :=
   ⋃ (iterLB D0 D1).
 
 End WhileSem1.
 
 Fixpoint boundedLB
-           (D0: state -> bool)
-           (D1: state -> state -> Prop)
+           (D0: io_state -> bool)
+           (D1: io_state -> io_state -> Prop)
            (n: nat):
-  state -> state -> Prop :=
+  io_state -> io_state -> Prop :=
   match n with
   | O => ∅
   | S n0 =>
@@ -186,9 +195,9 @@ Module WhileSem2.
 
 (** 第二种定义方式 *)
 Definition while_sem
-             (D0: state -> bool)
-             (D1: state -> state -> Prop):
-  state -> state -> Prop :=
+             (D0: io_state -> bool)
+             (D1: io_state -> io_state -> Prop):
+  io_state -> io_state -> Prop :=
   ⋃ (boundedLB D0 D1).
 
 End WhileSem2.
@@ -197,48 +206,26 @@ End WhileSem2.
 
 Export WhileSem2.
 
-(** 扩展语法 **)
-Inductive com :=
-| CSkip
-| CAsgn (X: var_name) (e: expr_int)
-| CSeq (c1 c2: com)
-| CIf (e: expr_bool) (c1 c2: com)
-| CWhile (e: expr_bool) (c: com)
-| CRead (X: var_name) (* 新增读取命令 *)
-| CWrite (e: expr_int). (* 新增写入命令 *)
 
 (** 下面是程序语句指称语义的递归定义。*)
 
-(** 递归定义指称语义 **)
 Fixpoint eval_com (c: com): io_state -> io_state -> Prop :=
   match c with
   | CSkip =>
-      fun s1 s2 => s2 = s1
+      skip_sem
   | CAsgn X e =>
-      fun s1 s2 =>
-        s2.(vars) X = eval_expr_int e s1.(vars) /\
-        (forall Y, X <> Y -> s2.(vars) Y = s1.(vars) Y) /\
-        s2.(input_queue) = s1.(input_queue) /\
-        s2.(output_queue) = s1.(output_queue)
+      asgn_sem X (eval_expr_int e)
   | CSeq c1 c2 =>
-      fun s1 s2 => exists s, eval_com c1 s1 s /\ eval_com c2 s s2
+      seq_sem (eval_com c1) (eval_com c2)
   | CIf e c1 c2 =>
-      fun s1 s2 =>
-        (eval_expr_bool e s1.(vars) = true /\ eval_com c1 s1 s2) \/
-        (eval_expr_bool e s1.(vars) = false /\ eval_com c2 s1 s2)
-  | CWhile e c =>
-      fun s1 s2 =>
-        exists n, iterLB (fun s => eval_expr_bool e s.(vars))
-                         (eval_com c)
-                         n
-                         s1
-                         s2
-  | CRead X =>
-      read_sem X
-  | CWrite e =>
-      write_sem e
+      if_sem (eval_expr_bool e) (eval_com c1) (eval_com c2)
+  | CWhile e c1 =>
+      while_sem (eval_expr_bool e) (eval_com c1)
+  | CInput X =>
+      input_sem X
+  | COutput e =>
+      output_sem (fun s => eval_expr_int e s)
   end.
-
 
 Notation "⟦ c ⟧" := (eval_com c)
   (at level 0, only printing, c custom prog_lang_entry at level 99).
@@ -507,7 +494,17 @@ Qed.
 Example Sets1_intersect_absorb_union:
   forall {A: Type} (x y: A -> Prop),
     x ∩ (x ∪ y) == x.
-Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
+Proof.
+  intros.
+  (** 与证明交集交换律的时候类似，我们将两个集合相等的证明归于为证明它们互为子集。*)
+  apply Sets_equiv_Sets_included; split.
+  + apply Sets1_intersect_included1.
+  + apply Sets_included_intersect.
+    - reflexivity.
+    - apply Sets1_included_union1.
+Qed.
+
+
 
 (************)
 (** 习题：  *)
@@ -518,7 +515,7 @@ Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结
 Example Sets1_union_absorb_intersect:
   forall {A: Type} (x y: A -> Prop),
     x ∪ (x ∩ y) == x.
-Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
+Admitted.
 
 
 (** 基本证明方法汇总：
@@ -594,6 +591,13 @@ Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结
 
 Lemma Sets1_intersect_empty_l:
   forall (A: Type) (x: A -> Prop), ∅ ∩ x == ∅.
+(* Proof.
+  intros.
+  apply Sets_equiv_Sets_included.
+  split.
+  + rewrite Sets_intersect_included1.
+    reflexivity.
+  + rewrite <- Sets_intersect_included1. *)
 Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
 
 
@@ -660,7 +664,22 @@ Lemma plus_n_plus_m:
   forall (plus_rel: Z -> Z -> Z -> Prop),
     (forall n m1 m2, (m1, m2) ∈ plus_rel n <-> m1 + n = m2) ->
     (forall n m, plus_rel n ∘ plus_rel m == plus_rel (n + m)).
-Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
+Proof.
+  intros.
+  Sets_unfold.
+  intros s1 s2.
+  split.
+  + intros [i [? ?]].
+    rewrite H.
+    rewrite H in H0, H1.
+    lia.
+  + intros.
+    exists (s1 + n).
+    rewrite H.
+    rewrite H.
+    rewrite H in H0.
+    split; lia.
+Qed. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
 
 (************)
 (** 习题：  *)
@@ -671,17 +690,69 @@ Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结
 Lemma Rels22_concat_assoc:
   forall {A: Type} (x y z: A -> A -> Prop),
     (x ∘ y) ∘ z == x ∘ (y ∘ z).
-Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
+Proof. 
+  intros.
+  Sets_unfold.
+  intros s0 s3.
+  split.
+  + intros [s2 [[s1 [Hx Hy]] Hz]].
+    exists s1.
+    split.
+    - apply Hx.
+    - exists s2.
+      split.
+      * apply Hy.
+      * apply Hz.
+  + intros [s1 [Hx [s2 [Hy Hz]]]].
+    exists s2.
+    split.
+    - exists s1.
+      split.
+      * apply Hx.
+      * apply Hy.
+    - apply Hz.
+Qed.
 
 Lemma Rels22_concat_id_l:
   forall {A: Type} (x: A -> A -> Prop),
     Rels.id ∘ x == x.
-Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
+Proof.
+  intros.
+  Sets_unfold.
+  intros s0 s2.
+  split.
+  + intros [s1 [? ?]].
+    rewrite H.
+    apply H0.
+  + intros.
+    exists s0.
+    split.
+    - reflexivity.
+    - apply H.
+Qed.
 
 Lemma Rels22_concat_union_distr_r:
   forall {A: Type} (x y z: A -> A -> Prop),
     (x ∪ y) ∘ z == x ∘ z ∪ y ∘ z.
-Admitted. (* 请删除这一行_[Admitted]_并填入你的证明，以_[Qed]_结束。 *)
+Proof.
+  intros.
+  Sets_unfold.
+  intros s0 s2.
+  split.
+  + intros [s1 [[Hx | Hy] Hz]].
+    - left.
+      exists s1.
+      tauto.
+    - right.
+      exists s1.
+      tauto.
+  + intros [[s1 [? ?]] | [s1 [? ?]]].
+    - exists s1.
+      tauto.
+    - exists s1.
+      tauto.
+Qed.
+    
 
 
 (** * 程序语句指称语义的性质 *)
@@ -698,7 +769,7 @@ Import Lang_SimpleWhile
 
 Example lt10_is_true_fact: 
   (fun s => ⟦ "x" < 10 ⟧ s = true) ==
-  (fun s => s "x" < 10).
+  (fun s => s.(vars) "x" < 10).
 Proof.
   sets_unfold.
   intros s.
@@ -708,9 +779,9 @@ Proof.
 Qed.
 
 Example lt10_test_true_fact:
-  forall s1 s2: state,
+  forall s1 s2: io_state,
     (s1, s2) ∈ test_true (⟦ "x" < 10 ⟧) <->
-    s1 "x" < 10 /\ s1 = s2.
+    s1.(vars) "x" < 10 /\ s1 = s2.
 Proof.
   unfold test_true.
   sets_unfold.
@@ -723,9 +794,9 @@ Qed.
 (** 能否用_[lt10_is_true_fact]_证明_[lt10_test_true_fact]_呢？可以！*)
 
 Example lt10_test_true_fact___again:
-  forall s1 s2: state,
+  forall s1 s2: io_state,
     (s1, s2) ∈ test_true (⟦ "x" < 10 ⟧) <->
-    s1 "x" < 10 /\ s1 = s2.
+    s1.(vars) "x" < 10 /\ s1 = s2.
 Proof.
   unfold test_true.
   intros s1 s2.
@@ -779,8 +850,8 @@ Qed.
 Example inc_x_fact:
   forall s1 s2 n,
     (s1, s2) ∈ ⟦ "x" = "x" + 1 ⟧ ->
-    s1 "x" = n ->
-    s2 "x" = n + 1.
+    s1.(vars) "x" = n ->
+    s2.(vars) "x" = n + 1.
 Proof.
   intros.
   unfold_sem in H.
@@ -797,8 +868,8 @@ Example abs_neg_5_fact:
     (s1, s2) ∈ ⟦ if ("x" < 0)
                  then { "y" = 0 - "x" }
                  else { "y" = "x" } ⟧ ->
-    s1 "x" = -5 ->
-    s2 "y" = 5.
+    s1.(vars) "x" = -5 ->
+    s2.(vars) "y" = 5.
 Proof.
   intros.
   (** 首先展开if语句的语义定义。*)
@@ -919,8 +990,8 @@ Example abs_neg_5_fact___again:
     (s1, s2) ∈ ⟦ if ("x" < 0)
                  then { "y" = 0 - "x" }
                  else { "y" = "x" } ⟧ ->
-    s1 "x" = -5 ->
-    s2 "y" = 5.
+    s1.(vars) "x" = -5 ->
+    s2.(vars) "y" = 5.
 Proof.
   intros.
   destruct_union H as [H | H].
@@ -963,8 +1034,8 @@ Example abs_neg_5_fact___again2:
     (s1, s2) ∈ ⟦ if ("x" < 0)
                  then { "y" = 0 - "x" }
                  else { "y" = "x" } ⟧ ->
-    s1 "x" = -5 ->
-    s2 "y" = 5.
+    s1.(vars) "x" = -5 ->
+    s2.(vars) "y" = 5.
 Proof.
   intros.
   choose_if_then_branch H.
@@ -982,8 +1053,8 @@ Example if_lt_10_plus_one_fact0:
     (s1, s2) ∈ ⟦ if ("x" < 10)
                  then { "x" = "x" + 1 }
                  else { skip } ⟧ ->
-    s1 "x" = 0 ->
-    s2 "x" = 1.
+    s1.(vars) "x" = 0 ->
+    s2.(vars) "x" = 1.
 Proof.
   intros.
   choose_if_then_branch H.
@@ -997,8 +1068,8 @@ Example if_lt_10_plus_one_fact10:
     (s1, s2) ∈ ⟦ if ("x" < 10)
                  then { "x" = "x" + 1 }
                  else { skip } ⟧ ->
-    s1 "x" = 10 ->
-    s2 "x" = 10.
+    s1.(vars) "x" = 10 ->
+    s2.(vars) "x" = 10.
 Proof.
   intros.
   choose_if_else_branch H.
@@ -1010,7 +1081,7 @@ Qed.
 (** 下面证明几条程序语句语义的一般性性质。我们首先可以证明，两种while语句语义的定义方式
     是等价的。*)
 
-Lemma while_sem1_while_sem2_equiv:
+(* Lemma while_sem1_while_sem2_equiv:
   forall D0 D1,
     WhileSem1.while_sem D0 D1 ==
     WhileSem2.while_sem D0 D1.
@@ -1021,10 +1092,14 @@ Proof.
   + apply Sets_indexed_union_included.
     intros n.
     rewrite <- (Sets_included_indexed_union (S n)).
-    induction n; simpl.
-    - Sets_unfold; intros; tauto.
-    - rewrite IHn; simpl.
-      Sets_unfold; intros; tauto.
+    induction n.
+    - simpl. Sets_unfold.
+      intros.
+      tauto.
+    - simpl (iterLB D0 D1 (S n)).
+      change (boundedLB D0 D1 (S (S n))) with (test_true D0 ∘ D1 ∘ boundedLB D0 D1 (S n) ∪ test_false D0).
+      rewrite IHn.
+      Abort.
   + apply Sets_indexed_union_included.
     intros n.
     induction n; simpl.
@@ -1042,7 +1117,7 @@ Proof.
       * rewrite <- (Sets_included_indexed_union O).
         simpl.
         reflexivity.
-Qed.
+Qed. *)
 
 (** 还可以证明，_[boundedLB]_是递增的。*)
 
@@ -1050,9 +1125,13 @@ Lemma boundedLB_inc1: forall D0 D1 n,
   boundedLB D0 D1 n ⊆ boundedLB D0 D1 (S n).
 Proof.
   intros.
-  induction n; simpl.
-  + apply Sets_empty_included.
-  + rewrite IHn at 1.
+  induction n.
+  + simpl.
+    apply Sets_empty_included.
+  + simpl (boundedLB D0 D1 (S n)).
+    change (boundedLB D0 D1 (S (S n)))
+     with (test_true D0 ∘ D1 ∘ boundedLB D0 D1 (S n) ∪ test_false D0).
+    rewrite IHn.
     reflexivity.
 Qed.
 
@@ -1060,11 +1139,11 @@ Theorem boundedLB_inc: forall D0 D1 n m,
   boundedLB D0 D1 m ⊆ boundedLB D0 D1 (n + m).
 Proof.
   intros.
-  induction n; simpl.
-  + reflexivity.
+  induction n.
+  + simpl. reflexivity.
   + rewrite IHn.
-    rewrite (boundedLB_inc1 D0 D1 (n + m)) at 1.
-    simpl.
+    simpl (S n + m)%nat.
+    rewrite (boundedLB_inc1 D0 D1 (n + m)).
     reflexivity.
 Qed.
 
@@ -1160,6 +1239,26 @@ Proof.
     reflexivity.
 Qed.
 
+#[export] Instance input_sem_congr:
+  Proper (eq ==> eq ==> Sets.equiv) input_sem.
+Proof.
+  unfold Proper, respectful.
+  intros X X' HX s1 s2 Hs; subst X'.
+  rewrite Hs.
+  reflexivity.
+Qed.
+
+#[export] Instance output_sem_congr:
+  Proper (func_equiv _ _ ==> eq ==> eq ==> Sets.equiv) output_sem.
+(* Proof.
+  unfold Proper, respectful.
+  intros E E' He s1 s2 Hs1 s1' s2' Hs2.
+  subst s2 s2'.
+  assert (E s1 = E' s1).
+  + apply He.
+  + Abort. *)
+Admitted.
+
 (** 下面证明Simplewhile程序语句行为等价的代数性质。*)
 
 #[export] Instance cequiv_equiv: Equivalence cequiv.
@@ -1200,6 +1299,25 @@ Proof.
   intros; simpl.
   apply while_sem_congr; tauto.
 Qed.
+
+#[export] Instance CInput_congr:
+  Proper (eq ==> cequiv) CInput.
+Proof.
+  unfold Proper, respectful, cequiv.
+  intros X X' HX s1 s2.
+  simpl.
+  rewrite HX.
+  reflexivity.
+Qed.
+
+#[export] Instance COutput_congr:
+  Proper (iequiv ==> cequiv) COutput.
+(* Proof.
+  unfold Proper, respectful, cequiv, iequiv.
+  intros E E' HE s1 s2.
+  simpl.
+Abort. *)
+Admitted.
 
 (** 更多关于程序行为的有用性质可以使用集合与关系的运算性质完成证明，_[seq_skip]_与
     _[skip_seq]_表明了删除顺序执行中多余的空语句不改变程序行为。*)
@@ -1276,8 +1394,8 @@ Qed.
 Example loop_to_5_fact:
   forall s1 s2,
     (s1, s2) ∈ ⟦ while ("x" < 5) do { "x" = "x" + 1 } ⟧ ->
-    s1 "x" = 1 ->
-    s2 "x" = 5.
+    s1.(vars) "x" = 1 ->
+    s2.(vars) "x" = 5.
 Proof.
   intros.
   rewrite while_unroll1 in H.

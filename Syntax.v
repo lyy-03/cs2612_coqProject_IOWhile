@@ -12,7 +12,7 @@ Definition var_name: Type := string.
 
 Declare Custom Entry prog_lang_entry.
 
-Module Lang_SimpleWhileIO.
+Module Lang_SimpleWhile.
 
 (** 并且使用Coq归纳类型定义表达式和语句的语法树。*)
 
@@ -35,9 +35,9 @@ Inductive com : Type :=
   | CAsgn (x: var_name) (e: expr_int): com
   | CSeq (c1 c2: com): com
   | CIf (e: expr_bool) (c1 c2: com): com
-  | CWhile (e: expr_bool) (c: com): com.
+  | CWhile (e: expr_bool) (c: com): com
   | CInput (x: var_name) : com               (* 新增：读取输入流中的一个值到变量 x *)
-  | COutput (e: expr) : com.                 (* 新增：将表达式的值写入输出流 *)
+  | COutput (e: expr_int) : com.                 (* 新增：将表达式的值写入输出流 *)
 
 (** 在Coq中，可以利用_[Notation]_使得这些表达式和程序语句更加易读。*)
 
@@ -100,7 +100,7 @@ Check [[input "x"]].       (* 输入语句 *)
 Check [[output ("x" + 1)]]. (* 输出语句 *)
 Check [["x" = "x" + 1 ; output "x"]]. (* 顺序包含输出的语句 *)
 
-End Lang_SimpleWhileIO.
+End Lang_SimpleWhile.
 
 (** * 更多的程序语言：While语言 *)
 
@@ -271,4 +271,3 @@ Definition prog: Type := list proc.
 
 
 End Lang_WhileProc.
-

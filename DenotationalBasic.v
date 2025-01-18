@@ -6,10 +6,10 @@ Require Import Coq.Classes.Equivalence.
 Require Import Coq.Classes.Morphisms.
 Require Import SetsClass.SetsClass. Import SetsNotation.
 Require Import Coq.Lists.List. Import ListNotations.
+Local Open Scope list.
 Require Import PL.InductiveType.
 Require Import PL.RecurProp.
 Require Import PL.Syntax.
-Local Open Scope list.
 Local Open Scope string.
 Local Open Scope Z.
 Local Open Scope sets.
@@ -23,6 +23,13 @@ Import Lang_SimpleWhile.
 
 Definition state: Type := var_name -> Z.
 
+(** * 扩展状态表示 *)
+Record io_state := {
+  vars: var_name -> Z;  (* 变量的值 *)
+  input_queue: list Z;  (* 输入队列 *)
+  output_queue: list Z  (* 输出队列 *)
+}.
+
 End StateModel_SimpleWhile1.
 
 Module DntSem_SimpleWhile1.
@@ -31,10 +38,10 @@ Import Lang_SimpleWhile
 
 (** 整数类型表达式的行为：*)
 
-Fixpoint eval_expr_int (e: expr_int) (s: state) : Z :=
+Fixpoint eval_expr_int (e: expr_int) (s: io_state) : Z :=
   match e with
   | EConst n => n
-  | EVar X => s X
+  | EVar X => s.(vars) X
   | EAdd e1 e2 => eval_expr_int e1 s + eval_expr_int e2 s
   | ESub e1 e2 => eval_expr_int e1 s - eval_expr_int e2 s
   | EMul e1 e2 => eval_expr_int e1 s * eval_expr_int e2 s
@@ -45,15 +52,15 @@ Notation "⟦ e ⟧" := (eval_expr_int e)
 
 (** 下面是两个具体的例子。*)
 
-Example eval_example1: forall (s: state),
-  s "x" = 1 ->
-  s "y" = 2 ->
+Example eval_example1: forall (s: io_state),
+  s.(vars) "x" = 1 ->
+  s.(vars) "y" = 2 ->
   ⟦ "x" + "y" ⟧ s = 3.
 Proof. intros. simpl. rewrite H, H0. reflexivity. Qed.
 
-Example eval_example2: forall (s: state),
-  s "x" = 1 ->
-  s "y" = 2 ->
+Example eval_example2: forall (s: io_state),
+  s.(vars) "x" = 1 ->
+  s.(vars) "y" = 2 ->
   ⟦ "x" * "y" + 1 ⟧ s = 3.
 Proof. intros. simpl. rewrite H, H0. reflexivity. Qed.
 
@@ -647,105 +654,383 @@ Module DntSem_SimpleWhile2.
 Import Lang_SimpleWhile
        StateModel_SimpleWhile1.
 
-(** * 扩展状态表示 *)
-Record io_state := {
-  vars: var_name -> Z;  (* 变量的值 *)
-  input_queue: list Z;  (* 输入队列 *)
-  output_queue: list Z  (* 输出队列 *)
-}.
+Definition add_sem (D1 D2: io_state -> Z) (s: io_state): Z :=
+  D1 s + D2 s.
 
-(** * 表达式语义（整数和布尔） *)
-Definition add_sem (D1 D2: io_state -> Z) (s: io_state): Z := D1 s + D2 s.
-Definition sub_sem (D1 D2: io_state -> Z) (s: io_state): Z := D1 s - D2 s.
-Definition mul_sem (D1 D2: io_state -> Z) (s: io_state): Z := D1 s * D2 s.
+Definition sub_sem (D1 D2: io_state -> Z) (s: io_state): Z :=
+  D1 s - D2 s.
 
-Definition const_sem (n: Z): io_state -> Z := fun s => n.
-Definition var_sem (X: var_name): io_state -> Z := fun s => s.(vars) X.
+Definition mul_sem (D1 D2: io_state -> Z) (s: io_state): Z :=
+  D1 s * D2 s.
+
+
+Check add_sem.
+
+(** 可以看到_[add_sem]_的类型是_[(io_state -> Z) -> (io_state -> Z) -> io_state -> Z]_，
+    这既可以被看做一个三元函数，也可以被看做一个二元函数，即函数之间的二元函数。
+    可以证明，这三个语义函数都能保持函数相等。*)
+
+#[export] Instance add_sem_congr:
+  Proper (func_equiv _ _ ==>
+          func_equiv _ _ ==>
+          func_equiv _ _) add_sem.
+Proof.
+  unfold Proper, respectful,
+         func_equiv, pointwise_relation.
+  intros D11 D12 H1 D21 D22 H2.
+  unfold add_sem.
+  intros s.
+  rewrite H1, H2.
+  reflexivity.
+Qed.
+
+#[export] Instance sub_sem_congr:
+  Proper (func_equiv _ _ ==>
+          func_equiv _ _ ==>
+          func_equiv _ _) sub_sem.
+Proof.
+  unfold Proper, respectful,
+         func_equiv, pointwise_relation.
+  intros D11 D12 H1 D21 D22 H2.
+  unfold sub_sem.
+  intros s.
+  rewrite H1, H2.
+  reflexivity.
+Qed.
+
+#[export] Instance mul_sem_congr:
+  Proper (func_equiv _ _ ==>
+          func_equiv _ _ ==>
+          func_equiv _ _) mul_sem.
+Proof.
+  unfold Proper, respectful,
+         func_equiv, pointwise_relation.
+  intros D11 D12 H1 D21 D22 H2.
+  unfold mul_sem.
+  intros s.
+  rewrite H1, H2.
+  reflexivity.
+Qed.
+
+(** 基于上面这三个用高阶函数定义的语义算子，可以重新定义整数类型表达式的指称语义。*)
+
+Definition const_sem (n: Z): io_state -> Z := 
+  fun s => n.
+
+Definition var_sem (X: var_name): io_state -> Z :=
+  fun s => s.(vars) X.
 
 Fixpoint eval_expr_int (e: expr_int): io_state -> Z :=
   match e with
-  | EConst n => const_sem n
-  | EVar X => var_sem X
-  | EAdd e1 e2 => add_sem (eval_expr_int e1) (eval_expr_int e2)
-  | ESub e1 e2 => sub_sem (eval_expr_int e1) (eval_expr_int e2)
-  | EMul e1 e2 => mul_sem (eval_expr_int e1) (eval_expr_int e2)
+  | EConst n =>
+      const_sem n
+  | EVar X =>
+      var_sem X
+  | EAdd e1 e2 =>
+      add_sem (eval_expr_int e1) (eval_expr_int e2)
+  | ESub e1 e2 =>
+      sub_sem (eval_expr_int e1) (eval_expr_int e2)
+  | EMul e1 e2 =>
+      mul_sem (eval_expr_int e1) (eval_expr_int e2)
   end.
 
-Definition true_sem: io_state -> bool := fun s => true.
-Definition false_sem: io_state -> bool := fun s => false.
-Definition lt_sem (D1 D2: io_state -> Z): io_state -> bool :=
-  fun s => if Z_lt_dec (D1 s) (D2 s) then true else false.
-Definition and_sem (D1 D2: io_state -> bool): io_state -> bool :=
+(** 下面我们同样引入_[⟦ e ⟧]_这个Notation，并且_[unfold_sem]_这个证明指令用于展开
+    语义相关的定义。*)
+
+Notation "⟦ e ⟧" := (eval_expr_int e)
+  (at level 0, only printing, e custom prog_lang_entry at level 99).
+
+Ltac get_prog_syntax x :=
+  match type of x with
+  | expr_int => constr:(x)
+  | Z => constr:(EConst x)
+  | string => constr:(EVar' x)
+  | var_name => constr:(EVar x)
+  end.
+
+Ltac any_eval' x :=
+  match goal with
+  | |- _ -> Z => exact (eval_expr_int x)
+  | _         => 
+    match type of x with
+    | expr_int => exact (eval_expr_int x)
+    end
+  end.
+
+Ltac any_eval x :=
+  let x' := get_prog_syntax x in
+  any_eval' x'.
+
+Notation "⟦ x ⟧" := (ltac:(any_eval x))
+  (at level 0, only parsing, x custom prog_lang_entry at level 99).
+
+Ltac unfold_expr_int_sem :=
+  cbv [add_sem sub_sem mul_sem const_sem var_sem].
+
+Ltac unfold_expr_int_sem_in_hyp H :=
+  cbv [add_sem sub_sem mul_sem const_sem var_sem] in H.
+
+Ltac ___unfold_sem :=
+  simpl eval_expr_int; unfold_expr_int_sem.
+
+Ltac ___unfold_sem_in_hyp H :=
+  simpl eval_expr_int in H; unfold_expr_int_sem_in_hyp H.
+
+Tactic Notation "unfold_sem" :=
+  ___unfold_sem.
+
+Tactic Notation "unfold_sem" "in" hyp(H) :=
+  ___unfold_sem_in_hyp H.
+
+Fact x_plus_one_fact:
+  forall s: io_state, ⟦ "x" + 1 ⟧ s = ⟦ "x" ⟧ s + 1.
+Proof. unfold_sem. lia. Qed.
+
+(** 同时，我们也可以用函数相等来定义表达式行为等价和并利用函数相等的代数性质来证明行为
+    等价的代数性质。*)
+
+Definition iequiv (e1 e2: expr_int): Prop :=
+  (⟦ e1 ⟧ == ⟦ e2 ⟧)%func.
+
+Notation "e1 '~=~' e2" := (iequiv e1 e2)
+  (at level 69, no associativity, only printing).
+
+Ltac any_equiv' x y :=
+  exact (iequiv x y).
+
+Ltac any_equiv x y :=
+  let x' := get_prog_syntax x in
+  let y' := get_prog_syntax y in
+  any_equiv' x' y'.
+
+Notation "e1 '~=~' e2" := (ltac:(any_equiv e1 e2))
+  (at level 69, no associativity, only parsing).
+
+#[export] Instance iequiv_equiv: Equivalence iequiv.
+Proof.
+  unfold iequiv.
+  apply equiv_in_domain.
+  apply func_equiv_equiv.
+Qed.
+
+#[export] Instance EAdd_congr:
+  Proper (iequiv ==> iequiv ==> iequiv) EAdd.
+Proof.
+  unfold Proper, respectful, iequiv.
+  intros; simpl.
+  apply add_sem_congr; tauto.
+Qed.
+
+#[export] Instance ESub_congr:
+  Proper (iequiv ==> iequiv ==> iequiv) ESub.
+Proof.
+  unfold Proper, respectful, iequiv.
+  intros; simpl.
+  apply sub_sem_congr; tauto.
+Qed.
+
+#[export] Instance EMul_congr:
+  Proper (iequiv ==> iequiv ==> iequiv) EMul.
+Proof.
+  unfold Proper, respectful, iequiv.
+  intros; simpl.
+  apply mul_sem_congr; tauto.
+Qed.
+
+
+
+(** * 布尔表达式的语义 *)
+
+(** 在Coq中可以如下定义：*)
+
+Definition true_sem: io_state -> bool :=
+  fun s => true.
+
+Definition false_sem: io_state -> bool :=
+  fun s => false.
+
+Definition lt_sem (D1 D2: io_state -> Z):
+  io_state -> bool :=
+  fun s =>
+    if Z_lt_dec (D1 s) (D2 s)
+    then true
+    else false.
+
+Definition and_sem (D1 D2: io_state -> bool):
+  io_state -> bool :=
   fun s => andb (D1 s) (D2 s).
-Definition not_sem (D: io_state -> bool): io_state -> bool :=
+
+Definition not_sem (D: io_state -> bool):
+  io_state -> bool :=
   fun s => negb (D s).
 
 Fixpoint eval_expr_bool (e: expr_bool): io_state -> bool :=
   match e with
-  | ETrue => true_sem
-  | EFalse => false_sem
-  | ELt e1 e2 => lt_sem (eval_expr_int e1) (eval_expr_int e2)
-  | EAnd e1 e2 => and_sem (eval_expr_bool e1) (eval_expr_bool e2)
-  | ENot e1 => not_sem (eval_expr_bool e1)
+  | ETrue =>
+      true_sem
+  | EFalse =>
+      false_sem
+  | ELt e1 e2 =>
+      lt_sem (eval_expr_int e1) (eval_expr_int e2)
+  | EAnd e1 e2 =>
+      and_sem (eval_expr_bool e1) (eval_expr_bool e2)
+  | ENot e1 =>
+      not_sem (eval_expr_bool e1)
   end.
 
-(** * 命令语法扩展 *)
-Inductive stmt :=
-  | SSkip
-  | SAssign (X: var_name) (e: expr_int)
-  | SSeq (s1 s2: stmt)
-  | SIf (e: expr_bool) (s1 s2: stmt)
-  | SWhile (e: expr_bool) (s: stmt)
-  | SRead (X: var_name)       (* 新增语法：读操作 *)
-  | SWrite (e: expr_int).     (* 新增语法：写操作 *)
+Notation "⟦ e ⟧" := (eval_expr_bool e)
+  (at level 0, only printing, e custom prog_lang_entry at level 99).
 
-(** * 新语义算子：IO操作 *)
-Definition read_sem (X: var_name) (s: io_state): io_state :=
-  match s.(input_queue) with
-  | [] => s (* 若输入队列为空，状态保持不变 *)
-  | v :: vs =>
-      {| vars := fun Y => if eqb Y X then v else s.(vars) Y;
-         input_queue := vs;
-         output_queue := s.(output_queue) |}
+Ltac get_prog_syntax x ::=
+  match type of x with
+  | expr_int => constr:(x)
+  | Z => constr:(EConst x)
+  | string => constr:(EVar' x)
+  | var_name => constr:(EVar x)
+  | expr_bool => constr:(x)
   end.
 
-Definition write_sem (e: io_state -> Z) (s: io_state): io_state :=
-  {| vars := s.(vars);
-     input_queue := s.(input_queue);
-     output_queue := s.(output_queue) ++ [e s] |}.
-
-(** * 命令的语义 *)
-Fixpoint eval_stmt (st: stmt) (s: io_state): io_state :=
-  match st with
-  | SSkip => s
-  | SAssign X e =>
-      {| vars := fun Y => if eqb Y X then ⟦ e ⟧ s else s.(vars) Y;
-         input_queue := s.(input_queue);
-         output_queue := s.(output_queue) |}
-  | SSeq s1 s2 =>
-      let s' := eval_stmt s1 s in
-      eval_stmt s2 s'
-  | SIf e s1 s2 =>
-      if ⟦ e ⟧ s then eval_stmt s1 s else eval_stmt s2 s
-  | SWhile e body =>
-      if ⟦ e ⟧ s then eval_stmt (SSeq body (SWhile e body)) s else s
-  | SRead X => read_sem X s
-  | SWrite e => write_sem ⟦ e ⟧ s
+Ltac any_eval' x ::=
+  match goal with
+  | |- _ -> Z    => exact (eval_expr_int x)
+  | |- _ -> bool => exact (eval_expr_bool x)
+  | _            =>
+    match type of x with
+    | expr_int  => exact (eval_expr_int x)
+    | expr_bool => exact (eval_expr_bool x)
+    end
   end.
 
-(** * 测试实例 *)
-Example test_io:
-  let s := {| vars := fun _ => 0; input_queue := [42; 7]; output_queue := [] |} in
-  let prog := SSeq (SRead "x")
-                   (SSeq (SWrite ("x" + 1))
-                         (SWrite ("x" * 2))) in
-  eval_stmt prog s =
-  {| vars := fun Y => if eqb Y "x" then 42 else 0;
-     input_queue := [7];
-     output_queue := [43; 84] |}.
+Ltac unfold_expr_bool_sem :=
+  cbv [true_sem false_sem lt_sem and_sem not_sem].
+
+Ltac unfold_expr_bool_sem_in_hyp H :=
+  cbv [true_sem false_sem lt_sem and_sem not_sem] in H.
+
+Ltac ___unfold_sem ::=
+  simpl eval_expr_bool; simpl eval_expr_int;
+  unfold_expr_bool_sem; unfold_expr_int_sem.
+
+Ltac ___unfold_sem_in_hyp H ::=
+  simpl eval_expr_bool in H; simpl eval_expr_int in H;
+  unfold_expr_bool_sem_in_hyp H; unfold_expr_int_sem_in_hyp H.
+
+(** 基于这一定义，我们可以证明一些简单性质。*)
+
+Lemma lt_spec:
+  forall (e1 e2: expr_int) (s: io_state),
+    ⟦ e1 < e2 ⟧ s = true <-> ⟦ e1 ⟧ s < ⟦ e2 ⟧ s.
 Proof.
-  simpl. reflexivity.
+  intros.
+  unfold_sem.
+  (** 下面的_[destruct]_指令是对_[⟦ e1 ⟧ s < ⟦ e2 ⟧ s]_是否成立做分类讨论。*)
+  destruct (Z_lt_dec (⟦ e1 ⟧ s) (⟦ e2 ⟧ s)).
+  + tauto.
+  + (** 下面的_[intuition]_指令在_[tauto]_的基础上一并考虑了一些基本类型的简单性质。*)
+    intuition.
 Qed.
 
-End DntSem_SimpleWhile2.
+(** 与整数类型表达式的行为等价定义一样，我们也可以用函数相等定义布尔表达式行为等价。*)
 
+Definition bequiv (e1 e2: expr_bool): Prop :=
+  (⟦ e1 ⟧ == ⟦ e2 ⟧)%func.
+
+Notation "e1 '~=~' e2" := (bequiv e1 e2)
+  (at level 69, no associativity, only printing).
+
+Ltac any_equiv' x y ::=
+  match type of x with
+  | expr_int  => exact (iequiv x y)
+  | expr_bool => exact (bequiv x y)
+  | _         =>
+      match type of y with
+      | expr_int  => exact (iequiv x y)
+      | expr_bool => exact (bequiv x y)
+      end
+  end.
+
+(** 我们同样可以证明一些简单的布尔表达式行为等价的例子。*)
+
+Example lt_plus_one_fact:
+  [[ "x" < "x" + 1 ]] ~=~ ETrue.
+Proof.
+  unfold bequiv; intros s.
+  unfold_sem.
+  destruct (Z_lt_dec (s.(vars) "x") (s.(vars) "x" + 1)).
+  + reflexivity.
+  + lia.
+Qed.
+
+(** 下面先证明三个语义算子_[lt_sem]_、_[and_sem]_与_[not_sem]_能保持函数相等，再利用
+    函数相等的性质证明布尔表达式行为等价的性质。*)
+
+#[export] Instance lt_sem_congr:
+  Proper (func_equiv _ _ ==>
+          func_equiv _ _ ==>
+          func_equiv _ _) lt_sem.
+Proof.
+  unfold Proper, respectful, lt_sem.
+  unfold func_equiv, pointwise_relation.
+  intros D11 D12 H1 D21 D22 H2 s.
+  rewrite H1, H2.
+  reflexivity.
+Qed.
+
+#[export] Instance and_sem_congr:
+  Proper (func_equiv _ _ ==>
+          func_equiv _ _ ==>
+          func_equiv _ _) and_sem.
+Proof.
+  unfold Proper, respectful, and_sem.
+  unfold func_equiv, pointwise_relation.
+  intros D11 D12 H1 D21 D22 H2 s.
+  rewrite H1, H2.
+  reflexivity.
+Qed.
+
+#[export] Instance not_sem_congr:
+  Proper (func_equiv _ _ ==> func_equiv _ _) not_sem.
+Proof.
+  unfold Proper, respectful, not_sem.
+  unfold func_equiv, pointwise_relation.
+  intros D1 D2 H s.
+  rewrite H.
+  reflexivity.
+Qed.
+
+#[export] Instance bequiv_equiv: Equivalence bequiv.
+Proof.
+  unfold bequiv.
+  apply equiv_in_domain.
+  apply func_equiv_equiv.
+Qed.
+
+#[export] Instance ELt_congr:
+  Proper (iequiv ==> iequiv ==> bequiv) ELt.
+Proof.
+  unfold Proper, respectful, bequiv, iequiv.
+  intros; simpl.
+  rewrite H, H0.
+  reflexivity.
+Qed.
+
+#[export] Instance EAnd_congr:
+  Proper (bequiv ==> bequiv ==> bequiv) EAnd.
+Proof.
+  unfold Proper, respectful, bequiv.
+  intros; simpl.
+  rewrite H, H0.
+  reflexivity.
+Qed.
+
+#[export] Instance ENot_congr:
+  Proper (bequiv ==> bequiv) ENot.
+Proof.
+  unfold Proper, respectful, bequiv.
+  intros; simpl.
+  rewrite H.
+  reflexivity.
+Qed.
+
+
+End DntSem_SimpleWhile2.
