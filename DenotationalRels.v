@@ -117,23 +117,20 @@ Notation "H '.(asgn_sem_other_var)'" :=
   (asgn_sem_other_var _ _ _ _ H)
   (at level 1).
 
-Record input_sem
-        (X: var_name)
-        (s1 s2: io_state): Prop :=
-  {
-  input_sem_dequeue: dequeue_input s1 = Some (s2, s2.(vars) X);
-  input_sem_queues: s2.(output_queue) = s1.(output_queue);
-  input_sem_vars: forall Y, X <> Y -> s2.(vars) Y = s1.(vars) Y;
-  }.
+Definition input_sem
+  (X: var_name)
+  (s1 s2: io_state): Prop :=
+dequeue_input s1 = Some (s2, s2.(vars) X) /\
+s2.(output_queue) = s1.(output_queue) /\
+(forall Y, X <> Y -> s2.(vars) Y = s1.(vars) Y).
 
-Record output_sem
-         (E: io_state -> Z)
-         (s1 s2: io_state): Prop :=
-  {
-    output_sem_enqueue: s2 = enqueue_output s1 (E s1);
-    output_sem_vars: s2.(vars) = s1.(vars);
-    output_sem_queues: s2.(input_queue) = s1.(input_queue);
-  }.
+Definition output_sem
+  (E: io_state -> Z)
+  (s1 s2: io_state): Prop :=
+s2 = enqueue_output s1 (E s1) /\
+s2.(vars) = s1.(vars) /\
+s2.(input_queue) = s1.(input_queue).
+
 
 Definition skip_sem: io_state -> io_state -> Prop :=
   Rels.id.
@@ -254,10 +251,10 @@ Ltac any_eval' x ::=
   end.
 
 Ltac unfold_com_sem :=
-  cbv [seq_sem if_sem while_sem skip_sem].
+  cbv [seq_sem if_sem while_sem skip_sem input_sem output_sem].
 
 Ltac unfold_com_sem_in_hyp H :=
-  cbv [seq_sem if_sem while_sem skip_sem] in H.
+  cbv [seq_sem if_sem while_sem skip_sem input_sem output_sem] in H.
 
 Ltac ___unfold_sem ::=
   simpl eval_com; simpl eval_expr_bool; simpl eval_expr_int;
@@ -1242,7 +1239,7 @@ Qed.
 #[export] Instance input_sem_congr:
   Proper (eq ==> eq ==> Sets.equiv) input_sem.
 Proof.
-  unfold Proper, respectful.
+  unfold Proper, respectful, input_sem.
   intros X X' HX s1 s2 Hs; subst X'.
   rewrite Hs.
   reflexivity.
@@ -1250,14 +1247,14 @@ Qed.
 
 #[export] Instance output_sem_congr:
   Proper (func_equiv _ _ ==> eq ==> eq ==> Sets.equiv) output_sem.
-(* Proof.
-  unfold Proper, respectful.
+Proof.
+  unfold Proper, respectful, output_sem.
   intros E E' He s1 s2 Hs1 s1' s2' Hs2.
   subst s2 s2'.
-  assert (E s1 = E' s1).
-  + apply He.
-  + Abort. *)
-Admitted.
+  rewrite He.
+  reflexivity.
+Qed.
+
 
 (** 下面证明Simplewhile程序语句行为等价的代数性质。*)
 
@@ -1312,12 +1309,15 @@ Qed.
 
 #[export] Instance COutput_congr:
   Proper (iequiv ==> cequiv) COutput.
-(* Proof.
+  Proof.
   unfold Proper, respectful, cequiv, iequiv.
   intros E E' HE s1 s2.
   simpl.
-Abort. *)
-Admitted.
+  unfold output_sem. (* 展开 output_sem 的定义 *)
+  rewrite HE.
+  reflexivity.
+Qed.
+
 
 (** 更多关于程序行为的有用性质可以使用集合与关系的运算性质完成证明，_[seq_skip]_与
     _[skip_seq]_表明了删除顺序执行中多余的空语句不改变程序行为。*)
